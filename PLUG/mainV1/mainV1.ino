@@ -12,12 +12,10 @@ int buttonPin = 4;
 int blinkPin = 2;
 int Buzzer = 19;
 
-// WiFi credentials
-const char* ssid = "nawin"; // ใส่ชื่อ Wi-Fi ของคุณ
-const char* password = "1234567890"; // ใส่รหัสผ่าน Wi-Fi ของคุณ
+const char* ssid = "nawin";
+const char* password = "1234567890";
 
-// Line Notify API
-String lineToken = "7sNg5bHPozMAZVei2mQIH041u5LZ183uGiWnILb9xvn"; // ใส่ Token ที่ได้จาก Line Developers
+String lineToken = "7sNg5bHPozMAZVei2mQIH041u5LZ183uGiWnILb9xvn";
 
 unsigned long buttonPressStart = 0;
 bool buttonPressed = false;
