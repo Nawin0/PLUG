@@ -2,65 +2,98 @@
 #include "PZEMModule.h"
 #include "RTCModule.h"
 #include <WiFi.h>
+#include <WiFiManager.h>
 #include <HTTPClient.h>
+#include <ArduinoJson.h>
 
 int S1 = 18;
 int S2 = 5;
-int S3 = 17;
-int S4 = 16;
+int S3 = 32;
+int S4 = 15;
 int buttonPin = 4;
 int blinkPin = 2;
 int Buzzer = 19;
 
-const char* ssid = "nawin";
-const char* password = "1234567890";
+const char* serverUrl = "https://apiplug.nareubad.work/";
+HTTPClient http;
 
-String lineToken = "7sNg5bHPozMAZVei2mQIH041u5LZ183uGiWnILb9xvn";
+WiFiManager wifiManager;
 
 unsigned long buttonPressStart = 0;
 bool buttonPressed = false;
 bool relayState = false;
 unsigned long lastBlinkTime = 0;
-bool pinState = false;
+unsigned long buttonPressDuration = 0;
+bool isWifiReset = false;
+
+float voltage, current, power, energy, frequency, powerFactor;
+String currentTime = "";
 
 void setup() {
   Serial.begin(115200);
 
   pinMode(S1, OUTPUT);
   pinMode(S2, OUTPUT);
+  pinMode(S3, OUTPUT);
+  pinMode(S4, OUTPUT);
+
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(blinkPin, OUTPUT);
   pinMode(Buzzer, OUTPUT);
 
   digitalWrite(S1, LOW);
   digitalWrite(S2, LOW);
+  digitalWrite(S3, LOW);
+  digitalWrite(S4, LOW);
 
-  // ตั้งค่า WiFi
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
+  wifiManager.setTimeout(120);
+  if (!wifiManager.autoConnect("PLUG")) {
+    Serial.println("Failed to connect to Wi-Fi. Restarting ESP32...");
     delay(1000);
-    Serial.println("Connecting to WiFi...");
+    ESP.restart();
   }
-  Serial.println("Connected to WiFi");
 
   setupPZEM();
   setupRTC();
+
+  xTaskCreatePinnedToCore(
+    sendDataToAPI_Task,
+    "SendDataToAPI",
+    10000,
+    NULL,
+    1,
+    NULL,
+    1
+  );
 }
 
-void sendLineNotify(String message) {
+void sendDataToAPI(float voltage, float current, float power, float energy, float frequency, float powerFactor, String currentTime) {
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
-    http.begin("https://notify-api.line.me/api/notify");
-    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-    http.addHeader("Authorization", "Bearer " + lineToken);
+    String url = serverUrl + String("devices_logs/");
 
-    String httpRequestData = "message=" + message;
-    int httpResponseCode = http.POST(httpRequestData);
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+
+    StaticJsonDocument<300> jsonDoc;
+    jsonDoc["devices_id"] = 1;
+    jsonDoc["voltage_value"] = voltage;
+    jsonDoc["current_value"] = current;
+    jsonDoc["power_value"] = power;
+    jsonDoc["energy_value"] = energy;
+    jsonDoc["frequency_value"] = frequency;
+    jsonDoc["power_factor_value"] = powerFactor;
+
+    String jsonData;
+    serializeJson(jsonDoc, jsonData);
+    Serial.println(jsonData);
+
+    int httpResponseCode = http.POST(jsonData);
 
     if (httpResponseCode > 0) {
-      Serial.println("Line Notify sent successfully: " + String(httpResponseCode));
+      Serial.println("Data sent to API successfully: " + String(httpResponseCode));
     } else {
-      Serial.println("Error sending Line Notify: " + String(httpResponseCode));
+      Serial.println("Error sending data to API: " + String(httpResponseCode));
     }
 
     http.end();
@@ -69,69 +102,90 @@ void sendLineNotify(String message) {
   }
 }
 
-String getElectricalData() {
+void sendDataToAPI_Task(void *parameter) {
+  while (true) {
+    if (millis() - lastBlinkTime >= 5000) {
 
-  String electricalData = readPZEM();
-  return electricalData;
+      voltage = pzem.voltage();
+      current = pzem.current();
+      power = pzem.power();
+      energy = pzem.energy();
+      frequency = pzem.frequency();
+      powerFactor = pzem.pf();
+
+      currentTime = getTime();
+      
+      if (WiFi.status() == WL_CONNECTED) {
+        sendDataToAPI(voltage, current, power, energy, frequency, powerFactor, currentTime);
+      } else if (WiFi.status() != WL_CONNECTED) {
+        checkconnectToWiFi();
+      }
+
+      lastBlinkTime = millis();
+    }
+    delay(200);
+  }
 }
 
-String getCurrentTime() {
-
-  String currentTime = getTime();
-  return currentTime;
+void checkconnectToWiFi() {
+  wifiManager.setTimeout(10);
+  if (!wifiManager.autoConnect("PLUG")) {
+    Serial.println("Failed to connect, waiting...");
+  } else {
+    Serial.println("Connected to WiFi.");
+  }
 }
 
 void loop() {
-
   if (digitalRead(buttonPin) == LOW) {
     if (!buttonPressed) {
       buttonPressStart = millis();
       buttonPressed = true;
     } else {
-      unsigned long pressDuration = millis() - buttonPressStart;
-      if (pressDuration >= 3000) {
+      buttonPressDuration = millis() - buttonPressStart;
+
+      unsigned long blinkInterval = buttonPressDuration / 800;
+      if (blinkInterval % 2 == 0) {
+        digitalWrite(blinkPin, HIGH);
+      } else {
+        digitalWrite(blinkPin, LOW);
+      }
+
+      if (buttonPressDuration >= 5000 && !isWifiReset) {
+        Serial.println("Button pressed for 5 seconds. Resetting WiFi...");
+        wifiManager.resetSettings();
+        wifiManager.startConfigPortal();
+        isWifiReset = true;
+      }
+
+      if (buttonPressDuration >= 3000 && buttonPressDuration < 5000) {
         if (relayState) {
           relayState = false;
           digitalWrite(S1, LOW);
           digitalWrite(S2, LOW);
+          digitalWrite(S3, LOW);
+          digitalWrite(S4, LOW);
           Serial.println("Relay OFF");
-          sendLineNotify("Relay OFF");
-          digitalWrite(Buzzer, HIGH);
-          delay(500);
-          digitalWrite(Buzzer, LOW);
-          delay(500);
+
         } else {
           relayState = true;
           digitalWrite(S1, HIGH);
           digitalWrite(S2, HIGH);
+          digitalWrite(S3, HIGH);
+          digitalWrite(S4, HIGH);
+          digitalWrite(Buzzer, HIGH);
+          delay(500);
+          digitalWrite(Buzzer, LOW);
+          delay(500);
           Serial.println("Relay ON");
-          sendLineNotify("Relay ON");
         }
 
-        unsigned long currentMillis = millis();
-        if (currentMillis - lastBlinkTime >= 500) {
-          lastBlinkTime = currentMillis;
-          pinState = !pinState;
-          digitalWrite(blinkPin, pinState);
-        }
       }
     }
   } else {
     buttonPressed = false;
-  }
-
-  // ส่งข้อมูลไปที่ Line ทุกๆ 5 วินาที
-  if (millis() - lastBlinkTime >= 5000) {
-    String electricalData = getElectricalData();
-    String currentTime = getCurrentTime();
-    String message = "เวลา: " + currentTime + "\n" + "ข้อมูลไฟฟ้า: \n" + electricalData;
-    sendLineNotify(message);
-    lastBlinkTime = millis();
-  }
-
-  if (!buttonPressed) {
     digitalWrite(blinkPin, LOW);
   }
 
-  delay(200);
+  delay(200); 
 }
