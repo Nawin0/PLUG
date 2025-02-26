@@ -25,6 +25,7 @@ bool relayState = false;
 unsigned long lastBlinkTime = 0;
 unsigned long buttonPressDuration = 0;
 bool isWifiReset = false;
+bool inConfigPortal = false;
 
 float voltage, current, power, energy, frequency, powerFactor;
 String currentTime = "";
@@ -63,8 +64,16 @@ void setup() {
     NULL,
     1,
     NULL,
-    1
-  );
+    1);
+
+  xTaskCreatePinnedToCore(
+    blinkLED_Task,
+    "BlinkLED",
+    2048,
+    NULL,
+    1,
+    NULL,
+    1);
 }
 
 void sendDataToAPI(float voltage, float current, float power, float energy, float frequency, float powerFactor, String currentTime) {
@@ -102,19 +111,23 @@ void sendDataToAPI(float voltage, float current, float power, float energy, floa
   }
 }
 
-void sendDataToAPI_Task(void *parameter) {
+void sendDataToAPI_Task(void* parameter) {
   while (true) {
-    if (millis() - lastBlinkTime >= 5000) {
+    if (millis() - lastBlinkTime >= 300000) {
 
-      voltage = pzem.voltage();
-      current = pzem.current();
-      power = pzem.power();
-      energy = pzem.energy();
-      frequency = pzem.frequency();
-      powerFactor = pzem.pf();
+      if (!relayState) {
+        current = power = energy = frequency = powerFactor = 0;
+        Serial.println("Relay OFF: Reset energy data, no API call.");
+      } else {
+        voltage = pzem.voltage();
+        current = pzem.current();
+        power = pzem.power();
+        energy = pzem.energy();
+        frequency = pzem.frequency();
+        powerFactor = pzem.pf();
 
-      currentTime = getTime();
-      
+        currentTime = getTime();
+      }
       if (WiFi.status() == WL_CONNECTED) {
         sendDataToAPI(voltage, current, power, energy, frequency, powerFactor, currentTime);
       } else if (WiFi.status() != WL_CONNECTED) {
@@ -124,6 +137,18 @@ void sendDataToAPI_Task(void *parameter) {
       lastBlinkTime = millis();
     }
     delay(200);
+  }
+}
+
+void blinkLED_Task(void* parameter) {
+  while (true) {
+    if (inConfigPortal) {
+      digitalWrite(blinkPin, !digitalRead(blinkPin));
+      delay(200);
+    } else {
+      digitalWrite(blinkPin, LOW);
+      delay(500);
+    }
   }
 }
 
@@ -153,8 +178,10 @@ void loop() {
 
       if (buttonPressDuration >= 5000 && !isWifiReset) {
         Serial.println("Button pressed for 5 seconds. Resetting WiFi...");
+        inConfigPortal = true;
         wifiManager.resetSettings();
         wifiManager.startConfigPortal();
+        inConfigPortal = false;
         isWifiReset = true;
       }
 
@@ -165,6 +192,7 @@ void loop() {
           digitalWrite(S2, LOW);
           digitalWrite(S3, LOW);
           digitalWrite(S4, LOW);
+          delay(2000);
           Serial.println("Relay OFF");
 
         } else {
@@ -176,10 +204,9 @@ void loop() {
           digitalWrite(Buzzer, HIGH);
           delay(500);
           digitalWrite(Buzzer, LOW);
-          delay(500);
+          delay(2000);
           Serial.println("Relay ON");
         }
-
       }
     }
   } else {
@@ -187,5 +214,5 @@ void loop() {
     digitalWrite(blinkPin, LOW);
   }
 
-  delay(200); 
+  delay(200);
 }
