@@ -8,6 +8,9 @@
 
 int S1 = 18, S2 = 5, S3 = 32, S4 = 15;
 int buttonPin = 4, blinkPin = 2, Buzzer = 19;
+int value_max = 0;
+int value_min = 0;
+String device = "1";
 
 const char* serverUrl = "https://apiplug.nareubad.work/";
 WiFiManager wifiManager;
@@ -55,6 +58,7 @@ void setup() {
   xTaskCreatePinnedToCore(blinkLED_Task, "BlinkLED", 2048, NULL, 1, NULL, 1);
 
   getRelayStatusFromAPI();
+  getValueAPI();
 }
 
 void checkWiFiConnection() {
@@ -73,7 +77,7 @@ void sendDataToAPI(float voltage, float current, float power, float energy, floa
   checkWiFiConnection();
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
-    String url = serverUrl + String("devices/");
+    String url = serverUrl + String("devices/") + device;
     http.begin(url);
     http.addHeader("Content-Type", "application/json");
 
@@ -105,6 +109,7 @@ void sendDataToAPI(float voltage, float current, float power, float energy, floa
     Serial.println("Cannot send data: WiFi not connected.");
   }
   getRelayStatusFromAPI();
+  getValueAPI();
 }
 
 void getRelayStatusFromAPI() {
@@ -112,7 +117,7 @@ void getRelayStatusFromAPI() {
 
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
-    String url = serverUrl + String("devices_details/");
+    String url = serverUrl + String("devices_details/") + device;
     http.begin(url);
 
     int httpCode = http.GET();
@@ -151,9 +156,46 @@ void getRelayStatusFromAPI() {
   }
 }
 
+void getValueAPI() {
+  checkWiFiConnection();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String url = serverUrl + String("value_controllers/")  + device;
+    http.begin(url);
+
+    int httpCode = http.GET();
+    if (httpCode > 0) {
+      String payload = http.getString();
+      Serial.println("API Response: " + payload);
+
+      StaticJsonDocument<512> doc;
+      DeserializationError error = deserializeJson(doc, payload);
+
+      if (!error) {
+        for (JsonObject obj : doc.as<JsonArray>()) {
+          value_max = obj["value_max"];
+          value_min = obj["value_min"];
+
+          Serial.print("Max Value: ");
+          Serial.print(value_max);
+          Serial.print(", Min Value: ");
+          Serial.println(value_min);
+        }
+      } else {
+        Serial.println("JSON parsing failed!");
+      }
+    } else {
+      Serial.println("Failed to get data from API");
+    }
+    http.end();
+  }
+}
+
+
 void sendRelayStateToAPI() {
   HTTPClient http;
-  String url = serverUrl + String("devices_details/");
+  String url = serverUrl + String("devices_details/") + device;
   http.begin(url);
 
   StaticJsonDocument<512> doc;
@@ -196,6 +238,24 @@ void sendRelayStateToAPI() {
   http.end();
 }
 
+void checkBuzzerAlert(float value) {
+  if (power > value_max) {
+    digitalWrite(Buzzer, HIGH);
+    Serial.println("buzzer ON");
+    Serial.println("MAX");
+    Serial.println(power);
+    Serial.println(value_max);
+  } else if (power < value_min) {
+    digitalWrite(Buzzer, HIGH);
+    Serial.println("buzzer ON");
+    Serial.println("MIN");
+    Serial.println(power);
+    Serial.println(value_min);
+  } else {
+    digitalWrite(Buzzer, LOW);
+  }
+}
+
 
 void sendDataToAPI_Task(void* parameter) {
   while (true) {
@@ -206,6 +266,8 @@ void sendDataToAPI_Task(void* parameter) {
     frequency = pzem.frequency();
     powerFactor = pzem.pf();
     currentTime = getTime();
+
+    checkBuzzerAlert(power);
 
     sendDataToAPI(voltage, current, power, energy, frequency, powerFactor, currentTime);
 
