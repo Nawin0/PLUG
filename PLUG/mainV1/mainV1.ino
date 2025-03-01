@@ -57,8 +57,8 @@ void setup() {
   xTaskCreatePinnedToCore(sendDataToAPI_Task, "SendDataToAPI", 10000, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(blinkLED_Task, "BlinkLED", 2048, NULL, 1, NULL, 1);
 
-  getRelayStatusFromAPI();
   getValueAPI();
+  getRelayStatusFromAPI();
 }
 
 void checkWiFiConnection() {
